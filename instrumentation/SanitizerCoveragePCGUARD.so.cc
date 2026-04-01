@@ -212,7 +212,7 @@ llvmGetPassPluginInfo() {
           [](PassBuilder &PB) {
 
 #if LLVM_MAJOR >= 16
-            PB.registerOptimizerEarlyEPCallback([](ModulePassManager &MPM,
+            PB.registerOptimizerLastEPCallback([](ModulePassManager &MPM,
                                                    OptimizationLevel  OL
   #if LLVM_MAJOR >= 20
                                                    ,
