@@ -350,7 +350,7 @@ enum {
   /* 06 */ QUAD,    /* Quadratic schedule               */
   /* 07 */ RARE,    /* Rare edges                       */
   /* 08 */ SEEK,    /* EXPLORE that ignores timings     */
-
+  /* 09 */ PRUNE,   /* new power schedule               */
   POWER_SCHEDULES_NUM
 
 };

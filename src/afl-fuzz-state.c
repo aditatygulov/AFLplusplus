@@ -30,7 +30,7 @@
 
 char *power_names[POWER_SCHEDULES_NUM] = {"explore", "mmopt", "exploit",
                                           "fast",    "coe",   "lin",
-                                          "quad",    "rare",  "seek"};
+                                          "quad",    "rare",  "seek", "prune"};
 
 /* Initialize MOpt "globals" for this afl state */
 

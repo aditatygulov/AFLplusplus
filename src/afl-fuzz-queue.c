@@ -123,7 +123,7 @@ void create_alias_table(afl_state_t *afl) {
         double weight = 1.0;
         {  // inline does result in a compile error with LTO, weird
 
-          if (unlikely(afl->schedule >= FAST && afl->schedule <= RARE)) {
+          if (unlikely(afl->schedule >= FAST && afl->schedule <= PRUNE)) {
 
             u32 hits = afl->n_fuzz[q->n_fuzz_entry];
             if (likely(hits)) { weight /= (log10(hits) + 1); }
@@ -816,7 +816,8 @@ void update_bitmap_score(afl_state_t *afl, struct queue_entry *q,
 
   if (unlikely(q->disabled)) { return; }
 
-  if (unlikely(afl->schedule >= FAST && afl->schedule < RARE)) {
+  if (unlikely(afl->schedule >= FAST && afl->schedule < RARE) ||
+    unlikely(afl->schedule == PRUNE)) {
 
     fuzz_p2 = 0;  // Skip the fuzz_p2 comparison
 
@@ -854,7 +855,8 @@ void update_bitmap_score(afl_state_t *afl, struct queue_entry *q,
           u64 top_rated_fav_factor;
           u64 top_rated_fuzz_p2;
 
-          if (unlikely(afl->schedule >= FAST && afl->schedule < RARE)) {
+          if (unlikely(afl->schedule >= FAST && afl->schedule < RARE) ||
+    unlikely(afl->schedule == PRUNE)) {
 
             top_rated_fuzz_p2 = 0;  // Skip the fuzz_p2 comparison
 
@@ -1101,7 +1103,8 @@ void update_bitmap_rescore(afl_state_t *afl, struct queue_entry *q, u32 index) {
 
   if (unlikely(q->disabled)) { return; }
 
-  if (unlikely(afl->schedule >= FAST && afl->schedule < RARE)) {
+  if (unlikely(afl->schedule >= FAST && afl->schedule < RARE) ||
+    unlikely(afl->schedule == PRUNE)) {
 
     fuzz_p2 = 0;  // Skip the fuzz_p2 comparison
 
@@ -1131,7 +1134,8 @@ void update_bitmap_rescore(afl_state_t *afl, struct queue_entry *q, u32 index) {
     u64 top_rated_fav_factor;
     u64 top_rated_fuzz_p2;
 
-    if (unlikely(afl->schedule >= FAST && afl->schedule < RARE)) {
+    if (unlikely(afl->schedule >= FAST && afl->schedule < RARE) ||
+    unlikely(afl->schedule == PRUNE)) {
 
       top_rated_fuzz_p2 = 0;  // Skip the fuzz_p2 comparison
 
@@ -1216,7 +1220,7 @@ u32 calculate_score(afl_state_t *afl, struct queue_entry *q) {
   // Longer execution time means longer work on the input, the deeper in
   // coverage, the better the fuzzing, right? -mh
 
-  if (likely(afl->schedule < RARE) && likely(!afl->fixed_seed)) {
+  if (likely(afl->schedule < RARE || afl->schedule == PRUNE) && likely(!afl->fixed_seed)) {
 
     if (q->exec_us * 0.1 > avg_exec_us) {
 
@@ -1326,6 +1330,59 @@ u32 calculate_score(afl_state_t *afl, struct queue_entry *q) {
     case EXPLORE:
       break;
 
+    case PRUNE: {
+
+    if (!q->fuzz_level) break;
+
+    /* PRUNE: Conservative Exhaustion Detection Schedule
+     *
+     * Reduces energy for seeds where three independent signals
+     * simultaneously indicate exhaustion. When any signal is weak,
+     * the multiplier stays close to 1.0, preserving EXPLORE behaviour.
+     * Never amplifies — only conservatively reduces.
+     * Multiplier range: [0.5, 1.0]                                    */
+
+    /* Signal 1 — Rarity exhaustion
+     * tc_ref counts bitmap bytes uniquely owned by this seed.
+     * tc_ref = 0: seed covers no unique edges → maximum exhaustion signal.
+     * tc_ref > 0: signal decays as unique edge ownership grows.
+     * Uses inverse Hill function: high rarity → low exhaustion signal. */
+    double rarity_exhaustion = (q->tc_ref == 0)
+        ? 1.0
+        : 1.0 / (1.0 + sqrt((double)q->tc_ref));
+
+    /* Signal 2 — Path saturation
+     * Proportion of total campaign executions that hit this seed's path.
+     * High value → path is globally well-explored → exhaustion evidence. */
+    double path_sat = (double)afl->n_fuzz[q->n_fuzz_entry]
+                    / (double)(afl->fsrv.total_execs > 0
+                       ? afl->fsrv.total_execs : 1);
+
+    /* Signal 3 — Personal exhaustion
+     * Harmonic decay over fuzz_level: 1 - 1/(fuzz_level+1).
+     * Grows toward 1.0 as seed is repeatedly selected.
+     * Requires no decay constant — self-normalising.                   */
+    double personal_exhaustion = 1.0 -
+        (1.0 / ((double)q->fuzz_level + 1.0));
+
+    /* Combined exhaustion — multiplicative.
+     * All three signals must be significant simultaneously.
+     * If any one is near zero, the product is near zero,
+     * and the multiplier stays close to 1.0.                          */
+    double exhaustion = rarity_exhaustion * path_sat * personal_exhaustion;
+
+    /* Final multiplier — only reduces, never amplifies.
+     * 0.5 floor: no seed is fully zeroed — uncertainty preserved.
+     * 0.5 penalty scale: maximum reduction is half baseline energy,
+     * consistent with AFL++ FAST schedule minimum factor of 0.4.      */
+    double multiplier = 1.0 - (exhaustion * 0.5);
+    if (multiplier < 0.5) multiplier = 0.5;
+
+    perf_score = (u32)((double)perf_score * multiplier);
+    factor = 1.0;
+    break;
+
+    }
     case SEEK:
       break;
 
@@ -1453,7 +1510,7 @@ u32 calculate_score(afl_state_t *afl, struct queue_entry *q) {
 
   }
 
-  if (unlikely(afl->schedule >= EXPLOIT && afl->schedule <= QUAD)) {
+  if (unlikely(afl->schedule >= EXPLOIT && afl->schedule <= PRUNE)) {
 
     if (factor > MAX_FACTOR) { factor = MAX_FACTOR; }
     perf_score *= factor / POWER_BETA;
